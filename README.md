@@ -128,7 +128,7 @@ Get-FileHash -Algorithm SHA256 DwgSearch_Portable_x64_v2.19.0.zip
 | 渠道 | 说明 |
 |------|------|
 | **GitHub Issues** | [提交 Bug / 功能建议](https://github.com/qqhsx/DwgSearch/issues) — 请附上：版本号、操作系统、复现步骤、错误截图/日志 |
-| **邮箱** | `qqhsx@qq.com`（仅限无法公开的安全/隐私问题） |
+| **邮箱** | `378600950@qq.com`（仅限无法公开的安全/隐私问题） |
 
 **常见问题自查**：
 - 索引卡住/极慢 → 检查「排除目录」是否误包含大量无关文件、降低「内容提取并发数」
@@ -148,7 +148,7 @@ Get-FileHash -Algorithm SHA256 DwgSearch_Portable_x64_v2.19.0.zip
 ## 📞 联系作者
 
 - **GitHub**: [@qqhsx](https://github.com/qqhsx)
-- **Email**: qqhsx@qq.com
+- **Email**: 378600950@qq.com
 - **主页**: https://github.com/qqhsx/DwgSearch
 
 ---
