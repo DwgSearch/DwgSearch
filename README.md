@@ -6,7 +6,7 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows%207%2F10%2F11-blue)
 ![Version](https://img.shields.io/badge/Version-2.19.0-orange)
 ![License](https://img.shields.io/badge/License-Proprietary-red)
-![Download](https://img.shields.io/github/downloads/qqhsx/DwgSearch/total?label=Downloads)
+![Download](https://img.shields.io/github/downloads/DwgSearch/DwgSearch/total?label=Downloads)
 
 ---
 
@@ -14,7 +14,7 @@
 
 | 版本 | 类型 | 适用场景 | SHA256 |
 |------|------|----------|--------|
-| **[v2.19.0 便携版](https://github.com/qqhsx/DwgSearch/releases/download/v2.19.0/DwgSearch_Portable_x64_v2.19.0.zip)** | `.zip` (单文件夹模式) | 免安装、绿色运行、U 盘携带、多版本共存、Win7/10/11 通用 | `见 Release 页面` |
+| **[v2.19.0 便携版](https://github.com/DwgSearch/DwgSearch/releases/download/v2.19.0/DwgSearch_Portable_x64_v2.19.0.zip)** | `.zip` (单文件夹模式) | 免安装、绿色运行、U 盘携带、多版本共存、Win7/10/11 通用 | `见 Release 页面` |
 
 > **⚡ 提示**：便携版解压即用，无需管理员权限；在 Windows 7 上运行需确保安装 .NET Framework 4.8。
 
@@ -127,7 +127,7 @@ Get-FileHash -Algorithm SHA256 DwgSearch_Portable_x64_v2.19.0.zip
 
 | 渠道 | 说明 |
 |------|------|
-| **GitHub Issues** | [提交 Bug / 功能建议](https://github.com/qqhsx/DwgSearch/issues) — 请附上：版本号、操作系统、复现步骤、错误截图/日志 |
+| **GitHub Issues** | [提交 Bug / 功能建议](https://github.com/DwgSearch/DwgSearch/issues) — 请附上：版本号、操作系统、复现步骤、错误截图/日志 |
 | **邮箱** | `378600950@qq.com`（仅限无法公开的安全/隐私问题） |
 
 **常见问题自查**：
@@ -149,7 +149,7 @@ Get-FileHash -Algorithm SHA256 DwgSearch_Portable_x64_v2.19.0.zip
 
 - **GitHub**: [@qqhsx](https://github.com/qqhsx)
 - **Email**: 378600950@qq.com
-- **主页**: https://github.com/qqhsx/DwgSearch
+- **主页**: https://github.com/DwgSearch/DwgSearch
 
 ---
 

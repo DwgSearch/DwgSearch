@@ -3,7 +3,7 @@ DWG 图纸搜索工具 — 专有软件许可证
 
 版本：2.19.0
 作者：qqhsx (qqhsx@qq.com)
-项目主页：https://github.com/qqhsx/dwg-search
+项目主页：https://github.com/DwgSearch/DwgSearch
 
 --------------------------------------------------------------------------------
 1. 许可证授予
@@ -11,7 +11,7 @@ DWG 图纸搜索工具 — 专有软件许可证
 本许可证授予您一项**个人的、非独占的、不可转让的、可撤销的**许可，允许您：
 - 在受支持的 Windows 设备上安装并运行本软件的二进制发布版本；
 - 仅为个人或内部商业用途使用本软件的功能（搜索、索引、替换 DWG 图纸）；
-- 通过指向本项目 GitHub Release 页面（https://github.com/qqhsx/dwg-search/releases）的原始链接分享本软件。
+- 通过指向本项目 GitHub Release 页面（https://github.com/DwgSearch/DwgSearch/releases）的原始链接分享本软件。
 
 --------------------------------------------------------------------------------
 2. 限制条款

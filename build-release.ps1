@@ -21,7 +21,7 @@ param(
     [string]$Version = "2.19.0",
     [switch]$UploadRelease,
     [string]$GitHubToken = "",
-    [string]$RepoOwner = "qqhsx",
+    [string]$RepoOwner = "DwgSearch",
     [string]$RepoName = "DwgSearch",
     [switch]$SkipBuild
 )
