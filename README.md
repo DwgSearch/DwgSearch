@@ -147,7 +147,7 @@ Get-FileHash -Algorithm SHA256 DwgSearch_Portable_x64_v2.19.0.zip
 
 ## 📞 联系作者
 
-- **GitHub**: [@qqhsx](https://github.com/qqhsx)
+- **GitHub**: [@DwgSearch](https://github.com/DwgSearch)
 - **Email**: 378600950@qq.com
 - **主页**: https://github.com/DwgSearch/DwgSearch
 
