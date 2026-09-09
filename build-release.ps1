@@ -23,7 +23,8 @@ param(
     [string]$GitHubToken = "",
     [string]$RepoOwner = "DwgSearch",
     [string]$RepoName = "DwgSearch",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipSourceSnapshot
 )
 
 # Configuration
@@ -40,6 +41,27 @@ $ReleaseTitle = "DwgSearch V$Version"
 $FolderModeExeName = "DwgSearchApp"
 $PortableZipName = "DwgSearch_Portable_x64_v$Version.zip"
 $Sha256FileName = "SHA256SUMS.txt"
+
+$SourceSnapshotZip = "G:\\Script\\dwg_search_project\\src_backup_DwgSearch_v$Version.zip"
+
+function Write-SourceSnapshot {
+    param([switch]$Force)
+    if (-not $Force -and $SkipSourceSnapshot) {
+        Write-Log "Skipping source snapshot (--SkipSourceSnapshot)"
+        return
+    }
+    Write-Log "Creating source code snapshot..."
+    $include = @("*.py", "*.spec", "*.ico", "*.csproj", "*.cs", "*.config", "*.props", "*.targets",
+                 "DwgTextExtractor", "DwgTextReplacer", "AccoreconsolePlugin", "*.md", "*.txt", "*.json", "*.ps1")
+    try {
+        $paths = foreach ($i in $include) { "$ProjectRoot\\$i" }
+        Compress-Archive -Path $paths -DestinationPath $SourceSnapshotZip -Force -CompressionLevel Optimal -ErrorAction Stop
+        $sizeMB = [math]::Round((Get-Item $SourceSnapshotZip).Length / 1MB, 1)
+        Write-Log ("  [OK] Source snapshot: {0} ({1} MB)" -f (Split-Path $SourceSnapshotZip -Leaf), $sizeMB)
+    } catch {
+        Write-Log ("[WARN] Source snapshot failed: {0}" -f $_.Exception.Message)
+    }
+}
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
@@ -84,6 +106,9 @@ if (-not $SkipBuild) {
     Remove-Item -Recurse -Force $BuildDir -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $ReleaseDir -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
+
+    # Create source snapshot before build
+    Write-SourceSnapshot
 }
 
 # Build .NET subprojects
@@ -189,7 +214,6 @@ if ($UploadRelease) {
     Write-Log ("[OK] Release published: https://github.com/{0}/{1}/releases/tag/{2}" -f $RepoOwner, $RepoName, $TagName)
 }
 
-Write-Log ""
 Write-Log "=== Build Release Complete ==="
 Write-Log ("Release directory: {0}" -f $ReleaseDir)
 $files = Get-ChildItem $ReleaseDir
@@ -197,10 +221,16 @@ foreach ($f in $files) {
     $sizeMB = [math]::Round($f.Length / 1MB, 1)
     Write-Log ("  {0} - {1} MB" -f $f.Name, $sizeMB)
 }
+if (Test-Path $SourceSnapshotZip) {
+    $sizeMB = [math]::Round((Get-Item $SourceSnapshotZip).Length / 1MB, 1)
+    Write-Log ("  Source snapshot: {0} - {1} MB" -f (Split-Path $SourceSnapshotZip -Leaf), $sizeMB)
+}
 Write-Log ""
 Write-Log "Next steps:"
 Write-Log "  1. Verify files in $ReleaseDir"
 Write-Log "  2. Test portable package on Windows 7/10/11"
+Write-Log "  3. Source snapshot saved at: $SourceSnapshotZip"
+Write-Log "     Rollback: Expand-Archive -Path $SourceSnapshotZip -DestinationPath . -Force"
 if (-not $UploadRelease) {
-    Write-Log ("  3. Run .\build-release.ps1 -Version {0} -UploadRelease to upload" -f $Version)
+    Write-Log ("  4. Run .\\build-release.ps1 -Version {0} -UploadRelease to upload" -f $Version)
 }
