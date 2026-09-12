@@ -1,0 +1,32 @@
+name: Sync Release to Gitee
+on:
+  release:
+    types: [published]
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download GitHub Release assets
+        uses: dsaltares/fetch-gh-release-assets@v1.2
+        with:
+          repo: ${{ github.repository }}
+          version: ${{ github.event.release.tag_name }}
+          path: ./release_assets
+
+      - name: Create Gitee Release
+        uses: gitee-com/action-create-release@v1
+        with:
+          repo: h1985/DwgSearch
+          tag: ${{ github.event.release.tag_name }}
+          name: ${{ github.event.release.name }}
+          body: ${{ github.event.release.body }}
+          assets: ./release_assets/*
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
