@@ -8,6 +8,7 @@ on:
         description: 'Release tag to sync (e.g. v2.19.0)'
         required: true
         type: string
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -29,19 +30,74 @@ jobs:
           fi
 
       - name: Download GitHub Release assets
-        uses: dsaltares/fetch-gh-release-assets@v1.2
-        with:
-          repo: ${{ github.repository }}
-          version: ${{ steps.vars.outputs.tag }}
-          path: ./release_assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.vars.outputs.tag }}"
+          mkdir -p ./release_assets
+          gh release download "$tag" --repo ${{ github.repository }} --dir ./release_assets --clobber
+          echo "Downloaded assets:"
+          ls -la ./release_assets/
 
       - name: Create Gitee Release
-        uses: gitee-com/action-create-release@v1
-        with:
-          repo: h1985/DwgSearch
-          tag: ${{ steps.vars.outputs.tag }}
-          name: ${{ github.event.release.name || format('DwgSearch {0}', steps.vars.outputs.tag) }}
-          body: ${{ github.event.release.body || '' }}
-          assets: ./release_assets/*
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          REPO: h1985/DwgSearch
+        run: |
+          # Get release info from GitHub
+          if [ "${{ github.event_name }}" = "release" ]; then
+            NAME="${{ github.event.release.name }}"
+            BODY="${{ github.event.release.body }}"
+          else
+            NAME="DwgSearch $TAG"
+            BODY=""
+          fi
+
+          # Create release on Gitee (or update if exists)
+          echo "Creating/updating Gitee release for $TAG..."
+          
+          # Check if release exists
+          RESPONSE=$(curl -s -X GET "https://gitee.com/api/v5/repos/$REPO/releases/tags/$TAG" \
+            -H "Authorization: token $GITEE_TOKEN" \
+            -H "Accept: application/json")
+          
+          RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+          
+          if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
+            echo "Release exists (id=$RELEASE_ID), updating..."
+            curl -s -X PATCH "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID" \
+              -H "Authorization: token $GITEE_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg name "$NAME" --arg body "$BODY" '{name: $name, body: $body}')"
+            
+            # Delete existing assets
+            ASSETS=$(curl -s -X GET "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
+              -H "Authorization: token $GITEE_TOKEN")
+            echo "$ASSETS" | jq -r '.[].id' | while read asset_id; do
+              curl -s -X DELETE "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets/$asset_id" \
+                -H "Authorization: token $GITEE_TOKEN"
+            done
+          else
+            echo "Creating new release..."
+            RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases" \
+              -H "Authorization: token $GITEE_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg tag "$TAG" --arg name "$NAME" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body, prerelease: false}')")
+            RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id')
+            echo "Created release id=$RELEASE_ID"
+          fi
+
+          # Upload assets
+          for asset in ./release_assets/*; do
+            [ -f "$asset" ] || continue
+            filename=$(basename "$asset")
+            echo "Uploading $filename..."
+            curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
+              -H "Authorization: token $GITEE_TOKEN" \
+              -F "file=@$asset" \
+              -F "name=$filename" > /dev/null
+            echo "  Uploaded $filename"
+          done
+          
+          echo "✅ Gitee release $TAG synced successfully"
