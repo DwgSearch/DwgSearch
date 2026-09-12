@@ -58,9 +58,11 @@ jobs:
           echo "Creating/updating Gitee release for $TAG..."
           
           # Check if release exists
+          echo "=== Checking existing release ==="
           RESPONSE=$(curl -s -X GET "https://gitee.com/api/v5/repos/$REPO/releases/tags/$TAG" \
             -H "Authorization: token $GITEE_TOKEN" \
             -H "Accept: application/json")
+          echo "GET response: $RESPONSE"
           
           RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
           
@@ -74,6 +76,7 @@ jobs:
             # Delete existing assets
             ASSETS=$(curl -s -X GET "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
               -H "Authorization: token $GITEE_TOKEN")
+            echo "Existing assets: $ASSETS"
             echo "$ASSETS" | jq -r '.[].id' | while read asset_id; do
               curl -s -X DELETE "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets/$asset_id" \
                 -H "Authorization: token $GITEE_TOKEN"
@@ -84,8 +87,14 @@ jobs:
               -H "Authorization: token $GITEE_TOKEN" \
               -H "Content-Type: application/json" \
               -d "$(jq -n --arg tag "$TAG" --arg name "$NAME" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body, prerelease: false}')")
-            RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id')
+            echo "POST response: $RESPONSE"
+            RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
             echo "Created release id=$RELEASE_ID"
+            
+            if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
+              echo "❌ Failed to create release, check token permissions and repo path"
+              exit 1
+            fi
           fi
 
           # Upload assets
@@ -93,10 +102,11 @@ jobs:
             [ -f "$asset" ] || continue
             filename=$(basename "$asset")
             echo "Uploading $filename..."
-            curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
+            UPLOAD_RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
               -H "Authorization: token $GITEE_TOKEN" \
               -F "file=@$asset" \
-              -F "name=$filename" > /dev/null
+              -F "name=$filename")
+            echo "Upload response: $UPLOAD_RESPONSE"
             echo "  Uploaded $filename"
           done
           
