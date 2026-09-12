@@ -51,7 +51,7 @@ jobs:
             BODY="${{ github.event.release.body }}"
           else
             NAME="DwgSearch $TAG"
-            BODY=""
+            BODY="Automated sync from GitHub Release $TAG. See [GitHub Release](https://github.com/${{ github.repository }}/releases/tag/$TAG) for details."
           fi
 
           # Create release on Gitee (or update if exists)
