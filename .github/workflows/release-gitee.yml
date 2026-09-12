@@ -2,6 +2,12 @@ name: Sync Release to Gitee
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to sync (e.g. v2.19.0)'
+        required: true
+        type: string
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -13,20 +19,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Determine tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Download GitHub Release assets
         uses: dsaltares/fetch-gh-release-assets@v1.2
         with:
           repo: ${{ github.repository }}
-          version: ${{ github.event.release.tag_name }}
+          version: ${{ steps.vars.outputs.tag }}
           path: ./release_assets
 
       - name: Create Gitee Release
         uses: gitee-com/action-create-release@v1
         with:
           repo: h1985/DwgSearch
-          tag: ${{ github.event.release.tag_name }}
-          name: ${{ github.event.release.name }}
-          body: ${{ github.event.release.body }}
+          tag: ${{ steps.vars.outputs.tag }}
+          name: ${{ github.event.release.name || format('DwgSearch {0}', steps.vars.outputs.tag) }}
+          body: ${{ github.event.release.body || '' }}
           assets: ./release_assets/*
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
