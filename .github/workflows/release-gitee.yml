@@ -86,7 +86,7 @@ jobs:
             RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases" \
               -H "Authorization: token $GITEE_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "$(jq -n --arg tag "$TAG" --arg name "$NAME" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body, prerelease: false}')")
+              -d "$(jq -n --arg tag "$TAG" --arg name "$NAME" --arg body "$BODY" --arg target "main" '{tag_name: $tag, name: $name, body: $body, prerelease: false, target_commitish: $target}')")
             echo "POST response: $RESPONSE"
             RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
             echo "Created release id=$RELEASE_ID"
