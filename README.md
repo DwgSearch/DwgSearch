@@ -6,6 +6,7 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows%207%2F10%2F11-blue)
 ![Version](https://img.shields.io/github/v/release/DwgSearch/DwgSearch?label=Version)
 ![License](https://img.shields.io/badge/License-Proprietary-red)
+![Download](https://img.shields.io/github/downloads/DwgSearch/DwgSearch/total?label=Downloads)
 
 ---
 
