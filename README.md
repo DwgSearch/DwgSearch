@@ -13,7 +13,7 @@
 
 | 版本 | 类型 | 适用场景 |
 |------|------|----------|
-| **[便携版（自动跳转最新版）](https://github.com/DwgSearch/DwgSearch/releases/latest)** | `.zip`（单文件夹模式） | 免安装、绿色运行、U 盘携带、Win7/10/11 通用 |
+| **[便携版（自动跳转最新版）](https://github.com/DwgSearch/DwgSearch/releases/latest)** | `.zip`（单文件夹模式） | 免安装、绿色运行、Win7/10/11 通用 |
 
 国内下载较慢可以用国内镜像：**[Gitee Release 列表](https://gitee.com/h1985/DwgSearch/releases)**（同样是最新版在最上面）
 
@@ -25,9 +25,7 @@
 
 | 组件 | 用途 | 下载地址 |
 |------|------|----------|
-| AccoreconsolePlugin/DwgTextReplacer | “批量替换”功能两个引擎，下载解压到运行程序目录 | **[DwgSearch_Component.ZIP](https://wwbwt.lanzouu.com/icNJu48coida)** |
-
-> 具体该下载哪个版本、放在什么路径，请以对应下载页面的说明为准。
+| AccoreconsolePlugin/DwgTextReplacer | “批量替换”功能的两个引擎，下载解压到运行程序目录 | **[DwgSearch_Component.ZIP](https://wwbwt.lanzouu.com/icNJu48coida)** |
 
 ---
 
@@ -37,7 +35,6 @@
 |------|------|
 | **全文检索** | 索引 DWG 图纸内的文字内容（模型空间、图纸空间、块定义、属性块） |
 | **文件名搜索** | 支持通配符 `*` `?`、正则表达式、大小写敏感切换 |
-| **结果列可自定义** | 结果表格可显示/隐藏「文件路径」「创建/修改日期」「DWG版本」「大小」等列 |
 | **批量替换** | 三种引擎可选（accoreconsole / AutoCAD COM / ACadSharp），支持预览、自动备份、按类型/位置精细控制替换范围 |
 | **右键菜单集成** | 资源管理器右键文件夹 →「用 DwgSearch 搜索此目录」 |
 | **书签收藏** | 一键保存常用「文件名+内容」搜索条件 |
@@ -62,11 +59,7 @@
 | 组件 | 要求 |
 |------|------|
 | **操作系统** | Windows 7 SP1 / 8 / 10 / 11（x64） |
-| **AutoCAD** | 可选。装了 AutoCAD 2018~2025 才能用 `accoreconsole` / `AutoCAD COM` 这两个引擎（`accoreconsole` 还需要额外下载匹配版本的插件，见上面「配套组件」）；`ACadSharp` 引擎是纯 .NET 实现，本机不需要装 AutoCAD |
 | **.NET Runtime** | 需要 .NET Framework 4.8（Win7 需手动安装，Win10/11 一般已预装） |
-| **磁盘空间** | 索引约占原图纸总大小 5%~15%（视文字密度而定） |
-
-> 引擎在软件里是**手动三选一**（默认 accoreconsole），不会自动检测有没有装 AutoCAD 来帮你切换；选了一个当前机器用不了的引擎，软件会弹窗提示，需要自己换成可用的。
 
 ---
 
