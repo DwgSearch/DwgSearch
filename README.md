@@ -129,5 +129,16 @@
 - **Email**: 378600950@qq.com
 
 ---
+## 💴 赞助
+> **如果这个工具帮你省了时间，欢迎赞助支持！ —— 完全自愿，不给也完全不影响使用。**
 
-> 如果这个工具帮你省了时间，欢迎在「帮助 → 捐赠作者」里请作者喝杯咖啡 —— 完全自愿，不给也完全不影响使用。
+![alipay](images/alipay.png)![wechat](images/wechat.png)
+
+---
+
+## ⭐ Star History
+> **支持开发者的最简单方式是点击页面顶部的星标（⭐）**
+
+[![Star History Chart](https://api.star-history.com/svg?repos=DwgSearch/DwgSearch&type=Date)](https://star-history.com/#DwgSearch/DwgSearch&Date)
+
+---
