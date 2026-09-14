@@ -25,7 +25,7 @@
 
 | 组件 | 用途 | 下载地址 |
 |------|------|----------|
-| **AccoreconsolePlugin/DwgTextReplacer ** | “批量替换”功能两个引擎，下载解压到运行程序目录 | **[DwgSearch_Component.ZIP](https://wwbwt.lanzouu.com/icNJu48coida)** |
+| AccoreconsolePlugin/DwgTextReplacer | “批量替换”功能两个引擎，下载解压到运行程序目录 | **[DwgSearch_Component.ZIP](https://wwbwt.lanzouu.com/icNJu48coida)** |
 
 > 具体该下载哪个版本、放在什么路径，请以对应下载页面的说明为准。
 
@@ -73,7 +73,7 @@
 ## 🚀 快速开始
 
 1. 下载并解压便携版到任意文件夹（如 `D:\Tools\DwgSearch`）
-2. 双击 `DwgSearchApp.exe` 运行
+2. 双击 `DwgSearch.exe` 运行
 3. 点击「添加搜索目录」选择图纸文件夹 →「开始索引」→ 等待完成即可搜索
 
 ---
