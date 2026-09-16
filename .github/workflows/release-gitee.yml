@@ -35,7 +35,29 @@ jobs:
         run: |
           tag="${{ steps.vars.outputs.tag }}"
           mkdir -p ./release_assets
-          gh release download "$tag" --repo ${{ github.repository }} --dir ./release_assets --clobber
+          
+          # Try gh CLI first
+          if gh release download "$tag" --repo ${{ github.repository }} --dir ./release_assets --clobber 2>/dev/null; then
+            echo "Downloaded via gh CLI"
+          else
+            echo "gh CLI failed, falling back to REST API..."
+            # Get asset URLs from release
+            ASSETS=$(curl -s -H "Authorization: token ${{ github.token }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" | jq -r '.assets[].url')
+            
+            for asset_url in $ASSETS; do
+              asset_name=$(curl -s -H "Authorization: token ${{ github.token }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "$asset_url" | jq -r '.name')
+              echo "Downloading $asset_name..."
+              curl -L -H "Authorization: token ${{ github.token }}" \
+                -H "Accept: application/octet-stream" \
+                -o "./release_assets/$asset_name" \
+                "$asset_url"
+            done
+          fi
+          
           echo "Downloaded assets:"
           ls -la ./release_assets/
 
