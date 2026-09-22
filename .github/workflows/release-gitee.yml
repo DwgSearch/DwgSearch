@@ -40,7 +40,27 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Using release tag: $TAG"
 
-      - name: Sync Release and Attachments to Gitee
+      - name: Download GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ steps.vars.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          ASSET_DIR="./release_assets"
+
+          rm -rf "$ASSET_DIR"
+          mkdir -p "$ASSET_DIR"
+
+          echo "=== Downloading GitHub Release assets ==="
+          gh release download "$TAG" --repo "$REPO" --dir "$ASSET_DIR" --clobber
+
+          echo "Downloaded assets:"
+          ls -lah "$ASSET_DIR"
+
+      - name: Sync Release and Upload Assets to Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           TAG: ${{ steps.vars.outputs.tag }}
@@ -50,50 +70,66 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "=== Fetching GitHub Release Details ==="
+          echo "=== Fetching GitHub Release details ==="
           RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/$GH_REPO/releases/tags/$TAG")
-          
           RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // "$TAG"')
           RELEASE_BODY=$(echo "$RELEASE_JSON" | jq -r '.body // ""')
 
-          # 附加 GitHub 下载源提示信息
-          APPEND_BODY=$'\n\n---\n*Note: Sync from GitHub Release. If attachment download is slow on Gitee, please download directly from [GitHub Release](https://github.com/'"$GH_REPO"'/releases/tag/'"$TAG"').*'
-          FULL_BODY="${RELEASE_BODY}${APPEND_BODY}"
-
-          echo "=== Syncing Release to Gitee ==="
-          
-          # 检查 Gitee 是否已存在 Release
-          CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: token $GITEE_TOKEN" \
+          echo "=== Checking Gitee release status ==="
+          EXIST_RELEASE=$(curl -s -H "Authorization: token $GITEE_TOKEN" \
             "https://gitee.com/api/v5/repos/$REPO/releases/tags/$TAG")
 
-          if [ "$CHECK_CODE" -eq 200 ]; then
-            echo "Release $TAG already exists on Gitee."
-          else
-            echo "Creating Release $TAG on Gitee..."
-            
-            # 提取所有附件的直链 URL
-            ASSET_URLS=$(echo "$RELEASE_JSON" | jq -c '[.assets[].browser_download_url]')
+          RELEASE_ID=$(echo "$EXIST_RELEASE" | jq -r '.id // empty')
 
-            PAYLOAD=$(jq -n \
-              --arg tag "$TAG" \
-              --arg name "$RELEASE_NAME" \
-              --arg body "$FULL_BODY" \
-              --argjson attach_urls "$ASSET_URLS" \
-              '{
-                tag_name: $tag,
-                name: $name,
-                body: $body,
-                prerelease: false,
-                target_commitish: "main",
-                attach_urls: $attach_urls
-              }')
-
-            RESPONSE=$(curl -s -X POST \
-              "https://gitee.com/api/v5/repos/$REPO/releases" \
+          if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
+            echo "Found existing Release on Gitee (ID: $RELEASE_ID). Updating release info..."
+            curl -s -X PATCH "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID" \
               -H "Authorization: token $GITEE_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD")
-
-            echo "Gitee Release Sync Complete."
+              -d $(jq -n --arg name "$RELEASE_NAME" --arg body "$RELEASE_BODY" '{name: $name, body: $body}') > /dev/null
+          else
+            echo "Creating new Release on Gitee..."
+            NEW_RELEASE=$(curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases" \
+              -H "Authorization: token $GITEE_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d $(jq -n --arg tag "$TAG" --arg name "$RELEASE_NAME" --arg body "$RELEASE_BODY" \
+                '{tag_name: $tag, name: $name, body: $body, target_commitish: "main"}'))
+            RELEASE_ID=$(echo "$NEW_RELEASE" | jq -r '.id // empty')
           fi
+
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
+            echo "❌ Failed to get or create Gitee Release ID."
+            exit 1
+          fi
+
+          echo "=== Cleaning old attachments on Gitee ==="
+          EXIST_FILES=$(curl -s -H "Authorization: token $GITEE_TOKEN" \
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files")
+          
+          echo "$EXIST_FILES" | jq -r '.[]?.id // empty' | while read -r file_id; do
+            if [ -n "$file_id" ]; then
+              echo "Deleting old file ID: $file_id"
+              curl -s -X DELETE "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files/$file_id" \
+                -H "Authorization: token $GITEE_TOKEN" > /dev/null
+            fi
+          done
+
+          echo "=== Uploading attachments to Gitee ==="
+          shopt -s nullglob
+          ASSETS=(./release_assets/*)
+          
+          for asset in "${ASSETS[@]}"; do
+            [ -f "$asset" ] || continue
+            filename="$(basename "$asset")"
+            echo "Uploading $filename..."
+
+            curl -sS --connect-timeout 20 \
+              --retry 3 \
+              --retry-delay 5 \
+              -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files" \
+              -H "Authorization: token $GITEE_TOKEN" \
+              -F "file=@$asset"
+            echo " ✅ Upload complete."
+          done
+
+          echo "🎉 All sync steps completed successfully!"
