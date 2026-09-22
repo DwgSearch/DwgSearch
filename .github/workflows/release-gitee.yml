@@ -66,7 +66,6 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           TAG: ${{ steps.vars.outputs.tag }}
           REPO: h1985/DwgSearch
-          # Pass release info via environment variables (avoids shell interpolation issues)
           GH_RELEASE_NAME: ${{ github.event.release.name }}
           GH_RELEASE_BODY: ${{ github.event.release.body }}
         run: |
@@ -128,19 +127,61 @@ jobs:
               rm -f "$BODY_FILE" "$NAME_FILE"
               exit 1
             fi
+            
+            # Wait for release to be ready (Gitee sometimes needs a moment)
+            echo "Waiting for release to be ready..."
+            for i in {1..10}; do
+              CHECK=$(curl -s -X GET "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID" \
+                -H "Authorization: token $GITEE_TOKEN" \
+                -H "Accept: application/json")
+              CHECK_ID=$(echo "$CHECK" | jq -r '.id // empty')
+              if [ "$CHECK_ID" = "$RELEASE_ID" ]; then
+                echo "Release confirmed ready"
+                break
+              fi
+              echo "  Waiting... ($i/10)"
+              sleep 2
+            done
           fi
+
+          # Verify release exists before uploading
+          echo "=== Verifying release before upload ==="
+          VERIFY=$(curl -s -X GET "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID" \
+            -H "Authorization: token $GITEE_TOKEN" \
+            -H "Accept: application/json")
+          VERIFY_ID=$(echo "$VERIFY" | jq -r '.id // empty')
+          if [ "$VERIFY_ID" != "$RELEASE_ID" ]; then
+            echo "❌ Release verification failed: $VERIFY"
+            rm -f "$BODY_FILE" "$NAME_FILE"
+            exit 1
+          fi
+          echo "Release verified: $RELEASE_ID"
 
           # Upload assets
           for asset in ./release_assets/*; do
             [ -f "$asset" ] || continue
             filename=$(basename "$asset")
             echo "Uploading $filename..."
-            UPLOAD_RESPONSE=$(curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
+            
+            # Upload with explicit status code capture
+            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
               -H "Authorization: token $GITEE_TOKEN" \
               -F "file=@$asset" \
               -F "name=$filename")
-            echo "Upload response: $UPLOAD_RESPONSE"
-            echo "  Uploaded $filename"
+            
+            HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
+            UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | head -n -1)
+            
+            echo "Upload HTTP status: $HTTP_CODE"
+            echo "Upload response: $UPLOAD_BODY"
+            
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              echo "  ✅ Uploaded $filename"
+            else
+              echo "  ❌ Upload failed for $filename (HTTP $HTTP_CODE)"
+              echo "  Response: $UPLOAD_BODY"
+              # Don't exit, try other assets
+            fi
           done
 
           # Cleanup temp files
