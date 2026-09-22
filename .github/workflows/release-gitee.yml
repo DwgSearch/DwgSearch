@@ -19,8 +19,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Determine tag
         id: vars
@@ -42,66 +40,60 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Using release tag: $TAG"
 
-      - name: Download GitHub Release assets
+      - name: Sync Release and Attachments to Gitee
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          REPO: h1985/DwgSearch
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
 
-          TAG="${{ steps.vars.outputs.tag }}"
-          REPO="${{ github.repository }}"
-          ASSET_DIR="./release_assets"
+          echo "=== Fetching GitHub Release Details ==="
+          RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/$GH_REPO/releases/tags/$TAG")
+          
+          RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // "$TAG"')
+          RELEASE_BODY=$(echo "$RELEASE_JSON" | jq -r '.body // ""')
 
-          rm -rf "$ASSET_DIR"
-          mkdir -p "$ASSET_DIR"
+          # 附加 GitHub 下载源提示信息
+          APPEND_BODY=$'\n\n---\n*Note: Sync from GitHub Release. If attachment download is slow on Gitee, please download directly from [GitHub Release](https://github.com/'"$GH_REPO"'/releases/tag/'"$TAG"').*'
+          FULL_BODY="${RELEASE_BODY}${APPEND_BODY}"
 
-          echo "=== Downloading GitHub Release assets ==="
-          echo "Repo: $REPO"
-          echo "Tag: $TAG"
+          echo "=== Syncing Release to Gitee ==="
+          
+          # 检查 Gitee 是否已存在 Release
+          CHECK_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token $GITEE_TOKEN" \
+            "https://gitee.com/api/v5/repos/$REPO/releases/tags/$TAG")
 
-          if gh release download "$TAG" \
-              --repo "$REPO" \
-              --dir "$ASSET_DIR" \
-              --clobber; then
-            echo "Downloaded via gh CLI"
+          if [ "$CHECK_CODE" -eq 200 ]; then
+            echo "Release $TAG already exists on Gitee."
           else
-            echo "⚠️ gh CLI download failed, falling back to GitHub REST API..."
+            echo "Creating Release $TAG on Gitee..."
+            
+            # 提取所有附件的直链 URL
+            ASSET_URLS=$(echo "$RELEASE_JSON" | jq -c '[.assets[].browser_download_url]')
 
-            RELEASE_JSON=$(curl -fsSL \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+            PAYLOAD=$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "$RELEASE_NAME" \
+              --arg body "$FULL_BODY" \
+              --argjson attach_urls "$ASSET_URLS" \
+              '{
+                tag_name: $tag,
+                name: $name,
+                body: $body,
+                prerelease: false,
+                target_commitish: "main",
+                attach_urls: $attach_urls
+              }')
 
-            ASSET_COUNT=$(echo "$RELEASE_JSON" | jq '.assets | length')
+            RESPONSE=$(curl -s -X POST \
+              "https://gitee.com/api/v5/repos/$REPO/releases" \
+              -H "Authorization: token $GITEE_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD")
 
-            if [ "$ASSET_COUNT" -eq 0 ]; then
-              echo "No GitHub Release assets found."
-            else
-              echo "Found $ASSET_COUNT GitHub Release assets."
-
-              echo "$RELEASE_JSON" |
-                jq -r '.assets[] | [.url, .name] | @tsv' |
-                while IFS=$'\t' read -r ASSET_URL ASSET_NAME; do
-                  echo "Downloading $ASSET_NAME..."
-
-                  curl -fsSL \
-                    -H "Authorization: Bearer $GH_TOKEN" \
-                    -H "Accept: application/octet-stream" \
-                    "$ASSET_URL" \
-                    -o "$ASSET_DIR/$ASSET_NAME"
-                done
-            fi
+            echo "Gitee Release Sync Complete."
           fi
-
-          echo
-          echo "Downloaded assets:"
-          ls -lah "$ASSET_DIR"
-
-      - name: Sync Release to Gitee
-        uses: abner/gitee-release-action@v1.0.0
-        with:
-          token: ${{ secrets.GITEE_TOKEN }}
-          repo: h1985/DwgSearch
-          tag: ${{ steps.vars.outputs.tag }}
-          file: ./release_assets/*
