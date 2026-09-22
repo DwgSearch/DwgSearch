@@ -1,4 +1,5 @@
 name: Sync Release to Gitee
+
 on:
   release:
     types: [published]
@@ -14,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,261 +24,498 @@ jobs:
 
       - name: Determine tag
         id: vars
+        shell: bash
         run: |
+          set -euo pipefail
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            TAG="${{ github.event.inputs.tag }}"
           else
-            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+            TAG="${{ github.event.release.tag_name }}"
           fi
+
+          if [ -z "$TAG" ]; then
+            echo "❌ Release tag is empty"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using release tag: $TAG"
 
       - name: Download GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          tag="${{ steps.vars.outputs.tag }}"
-          mkdir -p ./release_assets
-          
-          # Try gh CLI first
-          if gh release download "$tag" --repo ${{ github.repository }} --dir ./release_assets --clobber 2>/dev/null; then
+          set -euo pipefail
+
+          TAG="${{ steps.vars.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          ASSET_DIR="./release_assets"
+
+          rm -rf "$ASSET_DIR"
+          mkdir -p "$ASSET_DIR"
+
+          echo "=== Downloading GitHub Release assets ==="
+          echo "Repo: $REPO"
+          echo "Tag: $TAG"
+
+          # Try GitHub CLI first.
+          if gh release download "$TAG" \
+              --repo "$REPO" \
+              --dir "$ASSET_DIR" \
+              --clobber; then
             echo "Downloaded via gh CLI"
           else
-            echo "gh CLI failed, falling back to REST API..."
-            ASSETS=$(curl -s -H "Authorization: token ${{ github.token }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" | jq -r '.assets[].url')
-            
-            for asset_url in $ASSETS; do
-              asset_name=$(curl -s -H "Authorization: token ${{ github.token }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "$asset_url" | jq -r '.name')
-              echo "Downloading $asset_name..."
-              curl -L -H "Authorization: token ${{ github.token }}" \
-                -H "Accept: application/octet-stream" \
-                -o "./release_assets/$asset_name" \
-                "$asset_url"
-            done
-          fi
-          
-          echo "Downloaded assets:"
-          ls -la ./release_assets/
+            echo "⚠️ gh CLI download failed, falling back to GitHub REST API..."
 
-      - name: Create Gitee Release
+            RELEASE_JSON=$(curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+
+            ASSET_COUNT=$(echo "$RELEASE_JSON" | jq '.assets | length')
+
+            if [ "$ASSET_COUNT" -eq 0 ]; then
+              echo "No GitHub Release assets found."
+            else
+              echo "Found $ASSET_COUNT GitHub Release assets."
+
+              echo "$RELEASE_JSON" |
+                jq -r '.assets[] | [.url, .name] | @tsv' |
+                while IFS=$'\t' read -r ASSET_URL ASSET_NAME; do
+                  echo "Downloading $ASSET_NAME..."
+
+                  curl -fsSL \
+                    -H "Authorization: Bearer $GH_TOKEN" \
+                    -H "Accept: application/octet-stream" \
+                    "$ASSET_URL" \
+                    -o "$ASSET_DIR/$ASSET_NAME"
+                done
+            fi
+          fi
+
+          echo
+          echo "Downloaded assets:"
+          ls -lah "$ASSET_DIR"
+
+      - name: Sync Release to Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           TAG: ${{ steps.vars.outputs.tag }}
           REPO: h1985/DwgSearch
           GH_RELEASE_NAME: ${{ github.event.release.name }}
           GH_RELEASE_BODY: ${{ github.event.release.body }}
+        shell: bash
         run: |
           set -euo pipefail
-          
-          # Determine name/body from env vars
+
+          echo "=== Syncing Gitee release for $TAG ==="
+          echo "Repo: $REPO"
+          echo "Tag: $TAG"
+
+          # ------------------------------------------------------------
+          # Determine release name and body.
+          # ------------------------------------------------------------
           if [ "${{ github.event_name }}" = "release" ]; then
-            NAME="$GH_RELEASE_NAME"
-            BODY="$GH_RELEASE_BODY"
+            NAME="${GH_RELEASE_NAME:-DwgSearch $TAG}"
+            BODY="${GH_RELEASE_BODY:-}"
           else
             NAME="DwgSearch $TAG"
             BODY="Automated sync from GitHub Release $TAG. See [GitHub Release](https://github.com/${{ github.repository }}/releases/tag/$TAG) for details."
           fi
 
-          # Write body to temp file for safe JSON encoding
           BODY_FILE=$(mktemp)
+          trap 'rm -f "$BODY_FILE"' EXIT
           printf '%s' "$BODY" > "$BODY_FILE"
-          NAME_FILE=$(mktemp)
-          printf '%s' "$NAME" > "$NAME_FILE"
 
-          echo "=== Syncing Gitee release for $TAG ==="
-          echo "Repo: $REPO"
-          echo "Tag: $TAG"
           echo "Name: $NAME"
 
-          # Function to call Gitee API with error handling
+          # ------------------------------------------------------------
+          # Gitee API helper.
+          #
+          # IMPORTANT:
+          #   This function does NOT return HTTP errors through "return 1".
+          #   It always prints the response body and stores the HTTP status
+          #   in the caller through GITEE_HTTP_CODE.
+          #
+          #   This avoids conflicts between curl/API errors and "set -e".
+          # ------------------------------------------------------------
           gitee_api() {
-            local method=$1
-            local url=$2
-            local data=$3
+            local method="$1"
+            local url="$2"
+            local data="${3:-}"
+
             local response
+            local body
             local http_code
-            
+
             if [ -n "$data" ]; then
-              response=$(curl -s -w "\n%{http_code}" -X "$method" "$url" \
+              response=$(curl -sS \
+                --connect-timeout 15 \
+                --max-time 120 \
+                -X "$method" \
+                "$url" \
                 -H "Authorization: token $GITEE_TOKEN" \
                 -H "Content-Type: application/json" \
                 -H "Accept: application/json" \
-                -d "$data")
+                -d "$data" \
+                -w $'\n%{http_code}')
             else
-              response=$(curl -s -w "\n%{http_code}" -X "$method" "$url" \
+              response=$(curl -sS \
+                --connect-timeout 15 \
+                --max-time 120 \
+                -X "$method" \
+                "$url" \
                 -H "Authorization: token $GITEE_TOKEN" \
-                -H "Accept: application/json")
+                -H "Accept: application/json" \
+                -w $'\n%{http_code}')
             fi
-            
-            http_code=$(echo "$response" | tail -n1)
-            body=$(echo "$response" | head -n -1)
-            
-            echo "$body"
-            return $(([ "$http_code" -ge 200 && "$http_code" -lt 300 ]) && echo 0 || echo 1)
+
+            http_code=$(printf '%s\n' "$response" | tail -n 1)
+            body=$(printf '%s\n' "$response" | sed '$d')
+
+            GITEE_HTTP_CODE="$http_code"
+            printf '%s' "$body"
           }
 
-          # Check if release exists by tag
-          echo "=== Checking existing release ==="
-          RESPONSE=$(gitee_api GET "https://gitee.com/api/v5/repos/$REPO/releases/tags/$TAG")
-          HTTP_CODE=$?
-          echo "GET by tag response: $RESPONSE"
-          
-          RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty' 2>/dev/null || echo "")
-          
-          if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ] && [ "$HTTP_CODE" -eq 0 ]; then
-            echo "Release exists (id=$RELEASE_ID), updating..."
-            
-            # Update release - include tag_name just in case
-            UPDATE_DATA=$(jq -n --arg name "$NAME" --rawfile body "$BODY_FILE" --arg tag "$TAG" \
-              '{name: $name, body: $body, tag_name: $tag}')
-            
-            RESPONSE=$(gitee_api PATCH "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID" "$UPDATE_DATA")
-            HTTP_CODE=$?
-            echo "PATCH response (code=$HTTP_CODE): $RESPONSE"
-            
-            if [ "$HTTP_CODE" -ne 0 ]; then
-              echo "⚠️ PATCH failed, but continuing..."
-            fi
-            
-            # Wait for release to be ready
-            echo "Waiting for release to be ready..."
-            for i in {1..15}; do
-              CHECK=$(gitee_api GET "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID")
-              if [ $? -eq 0 ]; then
-                CHECK_ID=$(echo "$CHECK" | jq -r '.id // empty')
-                if [ "$CHECK_ID" = "$RELEASE_ID" ]; then
-                  echo "Release confirmed ready"
-                  break
-                fi
+          # ------------------------------------------------------------
+          # Build release JSON.
+          # ------------------------------------------------------------
+          CREATE_DATA=$(jq -n \
+            --arg tag "$TAG" \
+            --arg name "$NAME" \
+            --rawfile body "$BODY_FILE" \
+            '{
+              tag_name: $tag,
+              name: $name,
+              body: $body,
+              prerelease: false,
+              target_commitish: "main"
+            }')
+
+          UPDATE_DATA=$(jq -n \
+            --arg tag "$TAG" \
+            --arg name "$NAME" \
+            --rawfile body "$BODY_FILE" \
+            '{
+              tag_name: $tag,
+              name: $name,
+              body: $body
+            }')
+
+          # ------------------------------------------------------------
+          # Check whether the Gitee Release already exists.
+          # ------------------------------------------------------------
+          echo
+          echo "=== Checking existing Gitee release ==="
+
+          RESPONSE=$(gitee_api GET \
+            "https://gitee.com/api/v5/repos/$REPO/releases/tags/$TAG")
+
+          CHECK_CODE="$GITEE_HTTP_CODE"
+
+          echo "Gitee GET /releases/tags/$TAG -> HTTP $CHECK_CODE"
+
+          RELEASE_ID=""
+
+          case "$CHECK_CODE" in
+            200)
+              RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+
+              if [ -z "$RELEASE_ID" ]; then
+                echo "❌ Gitee returned HTTP 200 but no release ID was found."
+                echo "Response:"
+                echo "$RESPONSE"
+                exit 1
               fi
-              echo "  Waiting... ($i/15)"
-              sleep 3
-            done
+
+              echo "Release exists: id=$RELEASE_ID"
+              ;;
+
+            404)
+              echo "Release does not exist. It will be created."
+              ;;
+
+            401|403)
+              echo "❌ Gitee authentication/permission error (HTTP $CHECK_CODE)."
+              echo "$RESPONSE"
+              exit 1
+              ;;
+
+            429)
+              echo "❌ Gitee API rate limit reached (HTTP 429)."
+              echo "$RESPONSE"
+              exit 1
+              ;;
+
+            500|502|503|504)
+              echo "❌ Gitee server error while checking release (HTTP $CHECK_CODE)."
+              echo "$RESPONSE"
+              exit 1
+              ;;
+
+            *)
+              echo "❌ Unexpected Gitee response while checking release (HTTP $CHECK_CODE)."
+              echo "$RESPONSE"
+              exit 1
+              ;;
+          esac
+
+          # ------------------------------------------------------------
+          # Create or update release.
+          # ------------------------------------------------------------
+          if [ -n "$RELEASE_ID" ]; then
+            echo
+            echo "=== Updating existing Gitee release ==="
+
+            RESPONSE=$(gitee_api PATCH \
+              "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID" \
+              "$UPDATE_DATA")
+
+            PATCH_CODE="$GITEE_HTTP_CODE"
+
+            echo "Gitee PATCH release -> HTTP $PATCH_CODE"
+
+            if [ "$PATCH_CODE" -lt 200 ] || [ "$PATCH_CODE" -ge 300 ]; then
+              echo "❌ Failed to update Gitee release."
+              echo "$RESPONSE"
+              exit 1
+            fi
+
+            UPDATED_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
+
+            if [ -n "$UPDATED_ID" ] && [ "$UPDATED_ID" != "$RELEASE_ID" ]; then
+              echo "⚠️ Gitee returned a different release ID after update."
+              echo "Expected: $RELEASE_ID"
+              echo "Returned: $UPDATED_ID"
+              exit 1
+            fi
+
+            echo "✅ Release updated successfully."
+
           else
-            echo "Creating new release..."
-            CREATE_DATA=$(jq -n --arg tag "$TAG" --arg name "$NAME" --rawfile body "$BODY_FILE" --arg target "main" \
-              '{tag_name: $tag, name: $name, body: $body, prerelease: false, target_commitish: $target}')
-            
-            RESPONSE=$(gitee_api POST "https://gitee.com/api/v5/repos/$REPO/releases" "$CREATE_DATA")
-            HTTP_CODE=$?
-            echo "POST response (code=$HTTP_CODE): $RESPONSE"
-            
-            if [ "$HTTP_CODE" -ne 0 ]; then
-              echo "❌ Failed to create release"
-              echo "Response: $RESPONSE"
-              rm -f "$BODY_FILE" "$NAME_FILE"
+            echo
+            echo "=== Creating new Gitee release ==="
+
+            RESPONSE=$(gitee_api POST \
+              "https://gitee.com/api/v5/repos/$REPO/releases" \
+              "$CREATE_DATA")
+
+            CREATE_CODE="$GITEE_HTTP_CODE"
+
+            echo "Gitee POST release -> HTTP $CREATE_CODE"
+
+            if [ "$CREATE_CODE" -lt 200 ] || [ "$CREATE_CODE" -ge 300 ]; then
+              echo "❌ Failed to create Gitee release."
+              echo "$RESPONSE"
               exit 1
             fi
-            
+
             RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
-            echo "Created release id=$RELEASE_ID"
-            
+
             if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
-              echo "❌ Failed to get release ID from response"
-              rm -f "$BODY_FILE" "$NAME_FILE"
+              echo "❌ Gitee created the release but no release ID was returned."
+              echo "$RESPONSE"
               exit 1
             fi
-            
-            # Wait for release to be ready
-            echo "Waiting for new release to be ready..."
-            for i in {1..20}; do
-              CHECK=$(gitee_api GET "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID")
-              if [ $? -eq 0 ]; then
-                CHECK_ID=$(echo "$CHECK" | jq -r '.id // empty')
-                if [ "$CHECK_ID" = "$RELEASE_ID" ]; then
-                  echo "Release confirmed ready"
-                  break
-                fi
-              fi
-              echo "  Waiting... ($i/20)"
-              sleep 3
-            done
+
+            echo "✅ Created Gitee release: id=$RELEASE_ID"
           fi
 
-          # Verify release exists and get assets_url
-          echo "=== Verifying release before upload ==="
-          VERIFY=$(gitee_api GET "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID")
-          if [ $? -ne 0 ]; then
-            echo "❌ Release verification failed"
-            rm -f "$BODY_FILE" "$NAME_FILE"
+          # ------------------------------------------------------------
+          # Verify release.
+          # ------------------------------------------------------------
+          echo
+          echo "=== Verifying Gitee release ==="
+
+          VERIFY=$(gitee_api GET \
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID")
+
+          VERIFY_CODE="$GITEE_HTTP_CODE"
+
+          if [ "$VERIFY_CODE" -lt 200 ] || [ "$VERIFY_CODE" -ge 300 ]; then
+            echo "❌ Release verification failed (HTTP $VERIFY_CODE)."
+            echo "$VERIFY"
             exit 1
           fi
-          
+
           VERIFY_ID=$(echo "$VERIFY" | jq -r '.id // empty')
           ASSETS_URL=$(echo "$VERIFY" | jq -r '.assets_url // empty')
           HTML_URL=$(echo "$VERIFY" | jq -r '.html_url // empty')
-          
-          echo "Release verified: $VERIFY_ID"
-          echo "Assets URL: $ASSETS_URL"
-          echo "HTML URL: $HTML_URL"
-          
+
           if [ "$VERIFY_ID" != "$RELEASE_ID" ]; then
-            echo "❌ Release ID mismatch"
-            rm -f "$BODY_FILE" "$NAME_FILE"
+            echo "❌ Release ID mismatch."
+            echo "Expected: $RELEASE_ID"
+            echo "Returned: $VERIFY_ID"
             exit 1
           fi
 
-          # Get existing assets (for update case)
-          echo "=== Checking existing assets ==="
-          ASSETS_RESPONSE=$(gitee_api GET "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets")
-          ASSETS_HTTP=$?
-          echo "Assets response (code=$ASSETS_HTTP): $ASSETS_RESPONSE"
-          
-          if [ "$ASSETS_HTTP" -eq 0 ]; then
-            echo "$ASSETS_RESPONSE" | jq -r '.[].id' 2>/dev/null | while read asset_id; do
-              if [ -n "$asset_id" ] && [ "$asset_id" != "null" ]; then
-                echo "Deleting existing asset: $asset_id"
-                gitee_api DELETE "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets/$asset_id" >/dev/null
-              fi
-            done
-          else
-            echo "⚠️ Could not fetch existing assets (code=$ASSETS_HTTP), continuing..."
+          echo "Release verified: id=$VERIFY_ID"
+          echo "Assets URL: ${ASSETS_URL:-<none>}"
+          echo "HTML URL: ${HTML_URL:-<none>}"
+
+          # ------------------------------------------------------------
+          # Get existing assets and delete them.
+          #
+          # This makes manual re-sync idempotent:
+          # old assets -> delete -> upload current GitHub assets.
+          # ------------------------------------------------------------
+          echo
+          echo "=== Checking existing Gitee assets ==="
+
+          ASSETS_RESPONSE=$(gitee_api GET \
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets")
+
+          ASSETS_CODE="$GITEE_HTTP_CODE"
+
+          if [ "$ASSETS_CODE" -ne 200 ]; then
+            echo "❌ Failed to retrieve existing Gitee assets (HTTP $ASSETS_CODE)."
+            echo "$ASSETS_RESPONSE"
+            exit 1
           fi
 
-          # Upload assets
-          echo "=== Uploading assets ==="
-          for asset in ./release_assets/*; do
-            [ -f "$asset" ] || continue
-            filename=$(basename "$asset")
-            echo "Uploading $filename..."
-            
-            UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
-              -H "Authorization: token $GITEE_TOKEN" \
-              -F "file=@$asset" \
-              -F "name=$filename")
-            
-            HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
-            UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | head -n -1)
-            
-            echo "Upload HTTP status: $HTTP_CODE"
-            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-              echo "  ✅ Uploaded $filename"
-            else
-              echo "  ❌ Upload failed for $filename (HTTP $HTTP_CODE)"
+          ASSET_IDS=$(echo "$ASSETS_RESPONSE" |
+            jq -r 'if type == "array" then .[]?.id else empty end')
+
+          if [ -z "$ASSET_IDS" ]; then
+            echo "No existing Gitee assets."
+          else
+            while IFS= read -r asset_id; do
+              [ -z "$asset_id" ] && continue
+
+              echo "Deleting existing asset: $asset_id"
+
+              DELETE_RESPONSE=$(gitee_api DELETE \
+                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets/$asset_id")
+
+              DELETE_CODE="$GITEE_HTTP_CODE"
+
+              if [ "$DELETE_CODE" -lt 200 ] || [ "$DELETE_CODE" -ge 300 ]; then
+                echo "❌ Failed to delete existing asset $asset_id (HTTP $DELETE_CODE)."
+                echo "$DELETE_RESPONSE"
+                exit 1
+              fi
+
+              echo "  ✅ Deleted asset $asset_id"
+            done <<< "$ASSET_IDS"
+          fi
+
+          # ------------------------------------------------------------
+          # Upload GitHub Release assets.
+          # ------------------------------------------------------------
+          echo
+          echo "=== Uploading assets to Gitee ==="
+
+          shopt -s nullglob
+          ASSETS=(./release_assets/*)
+          shopt -u nullglob
+
+          UPLOAD_COUNT=0
+
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No GitHub Release assets to upload."
+          else
+            for asset in "${ASSETS[@]}"; do
+              [ -f "$asset" ] || continue
+
+              filename="$(basename "$asset")"
+              echo
+              echo "Uploading: $filename"
+              echo "Size: $(du -h "$asset" | cut -f1)"
+
+              UPLOAD_RESPONSE=$(curl -sS \
+                --connect-timeout 15 \
+                --max-time 900 \
+                -X POST \
+                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
+                -H "Authorization: token $GITEE_TOKEN" \
+                -F "file=@$asset" \
+                -F "name=$filename" \
+                -w $'\n%{http_code}')
+
+              UPLOAD_CODE=$(printf '%s\n' "$UPLOAD_RESPONSE" | tail -n 1)
+              UPLOAD_BODY=$(printf '%s\n' "$UPLOAD_RESPONSE" | sed '$d')
+
+              echo "Upload HTTP status: $UPLOAD_CODE"
+
+              if [ "$UPLOAD_CODE" -ge 200 ] && [ "$UPLOAD_CODE" -lt 300 ]; then
+                echo "  ✅ Uploaded $filename"
+                UPLOAD_COUNT=$((UPLOAD_COUNT + 1))
+                continue
+              fi
+
+              echo "  ⚠️ Primary upload URL failed."
               echo "  Response: $UPLOAD_BODY"
-              # Try alternative upload URL if available
+
+              # Try the release's assets_url as a fallback if Gitee
+              # provides one.
               if [ -n "$ASSETS_URL" ] && [ "$ASSETS_URL" != "null" ]; then
                 echo "  Trying alternative assets URL: $ASSETS_URL"
-                ALT_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$ASSETS_URL" \
+
+                ALT_RESPONSE=$(curl -sS \
+                  --connect-timeout 15 \
+                  --max-time 900 \
+                  -X POST \
+                  "$ASSETS_URL" \
                   -H "Authorization: token $GITEE_TOKEN" \
                   -F "file=@$asset" \
-                  -F "name=$filename")
-                ALT_CODE=$(echo "$ALT_RESPONSE" | tail -n1)
-                ALT_BODY=$(echo "$ALT_RESPONSE" | head -n -1)
-                echo "  Alt upload HTTP status: $ALT_CODE"
+                  -F "name=$filename" \
+                  -w $'\n%{http_code}')
+
+                ALT_CODE=$(printf '%s\n' "$ALT_RESPONSE" | tail -n 1)
+                ALT_BODY=$(printf '%s\n' "$ALT_RESPONSE" | sed '$d')
+
+                echo "Alternative upload HTTP status: $ALT_CODE"
+
                 if [ "$ALT_CODE" -ge 200 ] && [ "$ALT_CODE" -lt 300 ]; then
-                  echo "  ✅ Uploaded via alternative URL"
+                  echo "  ✅ Uploaded $filename via alternative URL"
+                  UPLOAD_COUNT=$((UPLOAD_COUNT + 1))
                   continue
                 fi
-                echo "  Alt response: $ALT_BODY"
-              fi
-            fi
-          done
 
-          # Cleanup temp files
-          rm -f "$BODY_FILE" "$NAME_FILE"
-          
+                echo "  ❌ Alternative upload also failed."
+                echo "  Response: $ALT_BODY"
+              fi
+
+              echo "❌ Upload failed for $filename."
+              exit 1
+            done
+          fi
+
+          # ------------------------------------------------------------
+          # Final verification.
+          # ------------------------------------------------------------
+          echo
+          echo "=== Final verification ==="
+
+          FINAL_RESPONSE=$(gitee_api GET \
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets")
+
+          FINAL_CODE="$GITEE_HTTP_CODE"
+
+          if [ "$FINAL_CODE" -ne 200 ]; then
+            echo "❌ Final asset verification failed (HTTP $FINAL_CODE)."
+            echo "$FINAL_RESPONSE"
+            exit 1
+          fi
+
+          FINAL_COUNT=$(echo "$FINAL_RESPONSE" |
+            jq 'if type == "array" then length else 0 end')
+
+          echo "Gitee asset count: $FINAL_COUNT"
+          echo "Assets uploaded in this run: $UPLOAD_COUNT"
+
+          if [ "$FINAL_COUNT" -ne "$UPLOAD_COUNT" ]; then
+            echo "❌ Final asset count does not match upload count."
+            echo "Expected: $UPLOAD_COUNT"
+            echo "Actual:   $FINAL_COUNT"
+            exit 1
+          fi
+
+          echo
+          echo "=========================================="
           echo "✅ Gitee release $TAG synced successfully"
+          echo "Assets uploaded: $UPLOAD_COUNT"
           echo "Release URL: https://gitee.com/$REPO/releases/tag/$TAG"
+          echo "=========================================="
