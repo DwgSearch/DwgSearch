@@ -70,6 +70,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          TMP_JSON=$(mktemp)
+          trap 'rm -f "$TMP_JSON"' EXIT
+
           echo "=== Fetching GitHub Release details ==="
           RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/$GH_REPO/releases/tags/$TAG")
           RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name // "$TAG"')
@@ -83,17 +86,22 @@ jobs:
 
           if [ -n "$RELEASE_ID" ] && [ "$RELEASE_ID" != "null" ]; then
             echo "Found existing Release on Gitee (ID: $RELEASE_ID). Updating release info..."
+            jq -n --arg name "$RELEASE_NAME" --arg body "$RELEASE_BODY" \
+              '{name: $name, body: $body}' > "$TMP_JSON"
+
             curl -s -X PATCH "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID" \
               -H "Authorization: token $GITEE_TOKEN" \
               -H "Content-Type: application/json" \
-              -d $(jq -n --arg name "$RELEASE_NAME" --arg body "$RELEASE_BODY" '{name: $name, body: $body}') > /dev/null
+              -d @"$TMP_JSON" > /dev/null
           else
             echo "Creating new Release on Gitee..."
+            jq -n --arg tag "$TAG" --arg name "$RELEASE_NAME" --arg body "$RELEASE_BODY" \
+              '{tag_name: $tag, name: $name, body: $body, target_commitish: "main"}' > "$TMP_JSON"
+
             NEW_RELEASE=$(curl -s -X POST "https://gitee.com/api/v5/repos/$REPO/releases" \
               -H "Authorization: token $GITEE_TOKEN" \
               -H "Content-Type: application/json" \
-              -d $(jq -n --arg tag "$TAG" --arg name "$RELEASE_NAME" --arg body "$RELEASE_BODY" \
-                '{tag_name: $tag, name: $name, body: $body, target_commitish: "main"}'))
+              -d @"$TMP_JSON")
             RELEASE_ID=$(echo "$NEW_RELEASE" | jq -r '.id // empty')
           fi
 
@@ -123,7 +131,10 @@ jobs:
             filename="$(basename "$asset")"
             echo "Uploading $filename..."
 
-            curl -sS --connect-timeout 20 \
+            curl -sS --connect-timeout 30 \
+              --max-time 900 \
+              --speed-limit 1000 \
+              --speed-time 30 \
               --retry 3 \
               --retry-delay 5 \
               -X POST "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files" \
