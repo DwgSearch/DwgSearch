@@ -141,17 +141,30 @@ jobs:
           #
           #   This avoids conflicts between curl/API errors and "set -e".
           # ------------------------------------------------------------
+          # IMPORTANT:
+          # Do NOT call this function through command substitution such as:
+          #   RESPONSE=$(gitee_api GET "...")
+          # Bash runs command substitutions in a subshell, so variables set
+          # inside the function would be lost.
+          #
+          # Correct usage:
+          #   gitee_api GET "..."
+          #   RESPONSE="$GITEE_RESPONSE"
+          #   CODE="$GITEE_HTTP_CODE"
           gitee_api() {
             local method="$1"
             local url="$2"
             local data="${3:-}"
 
-            local response
-            local body
+            local tmp_body
+            local curl_exit
             local http_code
 
+            tmp_body=$(mktemp)
+
             if [ -n "$data" ]; then
-              response=$(curl -sS \
+              set +e
+              http_code=$(curl -sS \
                 --connect-timeout 15 \
                 --max-time 120 \
                 -X "$method" \
@@ -160,23 +173,33 @@ jobs:
                 -H "Content-Type: application/json" \
                 -H "Accept: application/json" \
                 -d "$data" \
-                -w $'\n%{http_code}')
+                -o "$tmp_body" \
+                -w '%{http_code}')
+              curl_exit=$?
+              set -e
             else
-              response=$(curl -sS \
+              set +e
+              http_code=$(curl -sS \
                 --connect-timeout 15 \
                 --max-time 120 \
                 -X "$method" \
                 "$url" \
                 -H "Authorization: token $GITEE_TOKEN" \
                 -H "Accept: application/json" \
-                -w $'\n%{http_code}')
+                -o "$tmp_body" \
+                -w '%{http_code}')
+              curl_exit=$?
+              set -e
             fi
 
-            http_code=$(printf '%s\n' "$response" | tail -n 1)
-            body=$(printf '%s\n' "$response" | sed '$d')
-
             GITEE_HTTP_CODE="$http_code"
-            printf '%s' "$body"
+            GITEE_RESPONSE="$(cat "$tmp_body")"
+            rm -f "$tmp_body"
+
+            if [ "$curl_exit" -ne 0 ]; then
+              GITEE_HTTP_CODE="000"
+              GITEE_RESPONSE="${GITEE_RESPONSE:-curl failed with exit code $curl_exit}"
+            fi
           }
 
           # ------------------------------------------------------------
@@ -210,9 +233,10 @@ jobs:
           echo
           echo "=== Checking existing Gitee release ==="
 
-          RESPONSE=$(gitee_api GET \
-            "https://gitee.com/api/v5/repos/$REPO/releases/tags/$TAG")
+          gitee_api GET \
+            "https://gitee.com/api/v5/repos/$REPO/releases/tags/$TAG"
 
+          RESPONSE="$GITEE_RESPONSE"
           CHECK_CODE="$GITEE_HTTP_CODE"
 
           echo "Gitee GET /releases/tags/$TAG -> HTTP $CHECK_CODE"
@@ -269,10 +293,11 @@ jobs:
             echo
             echo "=== Updating existing Gitee release ==="
 
-            RESPONSE=$(gitee_api PATCH \
+            gitee_api PATCH \
               "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID" \
-              "$UPDATE_DATA")
+              "$UPDATE_DATA"
 
+            RESPONSE="$GITEE_RESPONSE"
             PATCH_CODE="$GITEE_HTTP_CODE"
 
             echo "Gitee PATCH release -> HTTP $PATCH_CODE"
@@ -298,10 +323,11 @@ jobs:
             echo
             echo "=== Creating new Gitee release ==="
 
-            RESPONSE=$(gitee_api POST \
+            gitee_api POST \
               "https://gitee.com/api/v5/repos/$REPO/releases" \
-              "$CREATE_DATA")
+              "$CREATE_DATA"
 
+            RESPONSE="$GITEE_RESPONSE"
             CREATE_CODE="$GITEE_HTTP_CODE"
 
             echo "Gitee POST release -> HTTP $CREATE_CODE"
@@ -329,9 +355,10 @@ jobs:
           echo
           echo "=== Verifying Gitee release ==="
 
-          VERIFY=$(gitee_api GET \
-            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID")
+          gitee_api GET \
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID"
 
+          VERIFY="$GITEE_RESPONSE"
           VERIFY_CODE="$GITEE_HTTP_CODE"
 
           if [ "$VERIFY_CODE" -lt 200 ] || [ "$VERIFY_CODE" -ge 300 ]; then
@@ -364,9 +391,10 @@ jobs:
           echo
           echo "=== Checking existing Gitee assets ==="
 
-          ASSETS_RESPONSE=$(gitee_api GET \
-            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets")
+          gitee_api GET \
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets"
 
+          ASSETS_RESPONSE="$GITEE_RESPONSE"
           ASSETS_CODE="$GITEE_HTTP_CODE"
 
           if [ "$ASSETS_CODE" -ne 200 ]; then
@@ -386,9 +414,10 @@ jobs:
 
               echo "Deleting existing asset: $asset_id"
 
-              DELETE_RESPONSE=$(gitee_api DELETE \
-                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets/$asset_id")
+              gitee_api DELETE \
+                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets/$asset_id"
 
+              DELETE_RESPONSE="$GITEE_RESPONSE"
               DELETE_CODE="$GITEE_HTTP_CODE"
 
               if [ "$DELETE_CODE" -lt 200 ] || [ "$DELETE_CODE" -ge 300 ]; then
@@ -489,9 +518,10 @@ jobs:
           echo
           echo "=== Final verification ==="
 
-          FINAL_RESPONSE=$(gitee_api GET \
-            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets")
+          gitee_api GET \
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets"
 
+          FINAL_RESPONSE="$GITEE_RESPONSE"
           FINAL_CODE="$GITEE_HTTP_CODE"
 
           if [ "$FINAL_CODE" -ne 200 ]; then
