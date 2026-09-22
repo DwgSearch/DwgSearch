@@ -98,12 +98,10 @@ jobs:
           echo "Downloaded assets:"
           ls -lah "$ASSET_DIR"
 
-      - name: Sync Release and Assets to Gitee
-        uses: yanglbme/gitee-release-action@v1.5.0
+      - name: Sync Release to Gitee
+        uses: abner/gitee-release-action@v1.0.0
         with:
-          server: https://gitee.com
-          owner: h1985
-          repo: DwgSearch
-          tag: ${{ steps.vars.outputs.tag }}
           token: ${{ secrets.GITEE_TOKEN }}
-          asset_path: ./release_assets/*
+          repo: h1985/DwgSearch
+          tag: ${{ steps.vars.outputs.tag }}
+          file: ./release_assets/*
