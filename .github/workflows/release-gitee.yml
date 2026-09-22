@@ -133,24 +133,7 @@ jobs:
 
           # ------------------------------------------------------------
           # Gitee API helper.
-          #
-          # IMPORTANT:
-          #   This function does NOT return HTTP errors through "return 1".
-          #   It always prints the response body and stores the HTTP status
-          #   in the caller through GITEE_HTTP_CODE.
-          #
-          #   This avoids conflicts between curl/API errors and "set -e".
           # ------------------------------------------------------------
-          # IMPORTANT:
-          # Do NOT call this function through command substitution such as:
-          #   RESPONSE=$(gitee_api GET "...")
-          # Bash runs command substitutions in a subshell, so variables set
-          # inside the function would be lost.
-          #
-          # Correct usage:
-          #   gitee_api GET "..."
-          #   RESPONSE="$GITEE_RESPONSE"
-          #   CODE="$GITEE_HTTP_CODE"
           gitee_api() {
             local method="$1"
             local url="$2"
@@ -201,10 +184,6 @@ jobs:
               GITEE_RESPONSE="${GITEE_RESPONSE:-curl failed with exit code $curl_exit}"
             fi
           }
-
-          # Gitee Release attachments use the /attach_files API.
-          # Gitee does NOT use GitHub's /assets endpoint here.
-          # See Gitee SDK API definitions for GET/POST/DELETE attach_files.
 
           # ------------------------------------------------------------
           # Build release JSON.
@@ -382,13 +361,10 @@ jobs:
           fi
 
           echo "Release verified: id=$VERIFY_ID"
-                    echo "HTML URL: ${HTML_URL:-<none>}"
+          echo "HTML URL: ${HTML_URL:-<none>}"
 
           # ------------------------------------------------------------
           # Get existing Release attachments and delete them.
-          #
-          # This makes manual re-sync idempotent:
-          # old assets -> delete -> upload current GitHub assets.
           # ------------------------------------------------------------
           echo
           echo "=== Checking existing Gitee Release attachments ==="
@@ -433,7 +409,7 @@ jobs:
           fi
 
           # ------------------------------------------------------------
-          # Upload GitHub Release attachments.
+          # Upload GitHub Release attachments (with Auto-Retry).
           # ------------------------------------------------------------
           echo
           echo "=== Uploading Release attachments to Gitee ==="
@@ -455,32 +431,55 @@ jobs:
               echo "Uploading: $filename"
               echo "Size: $(du -h "$asset" | cut -f1)"
 
-              UPLOAD_RESPONSE=$(curl -sS \
-                --connect-timeout 15 \
-                --max-time 900 \
-                -X POST \
-                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files" \
-                -H "Authorization: token $GITEE_TOKEN" \
-                -F "file=@$asset" \
-                -F "name=$filename" \
-                -w $'\n%{http_code}')
+              MAX_RETRIES=3
+              RETRY_COUNT=0
+              SUCCESS=0
 
-              UPLOAD_CODE=$(printf '%s\n' "$UPLOAD_RESPONSE" | tail -n 1)
-              UPLOAD_BODY=$(printf '%s\n' "$UPLOAD_RESPONSE" | sed '$d')
+              while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                echo "Attempt $RETRY_COUNT of $MAX_RETRIES..."
 
-              echo "Upload HTTP status: $UPLOAD_CODE"
+                set +e
+                UPLOAD_RESPONSE=$(curl -sS \
+                  --connect-timeout 30 \
+                  --max-time 600 \
+                  --speed-limit 1000 \
+                  --speed-time 30 \
+                  -X POST \
+                  "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files" \
+                  -H "Authorization: token $GITEE_TOKEN" \
+                  -F "file=@$asset" \
+                  -F "name=$filename" \
+                  -w $'\n%{http_code}')
+                CURL_EXIT=$?
+                set -e
 
-              if [ "$UPLOAD_CODE" -ge 200 ] && [ "$UPLOAD_CODE" -lt 300 ]; then
-                echo "  ✅ Uploaded $filename"
-                UPLOAD_COUNT=$((UPLOAD_COUNT + 1))
-                continue
+                if [ $CURL_EXIT -ne 0 ]; then
+                  echo "  ⚠️ Curl failed with exit code $CURL_EXIT"
+                  UPLOAD_CODE="000"
+                  UPLOAD_BODY="Curl failed"
+                else
+                  UPLOAD_CODE=$(printf '%s\n' "$UPLOAD_RESPONSE" | tail -n 1)
+                  UPLOAD_BODY=$(printf '%s\n' "$UPLOAD_RESPONSE" | sed '$d')
+                fi
+
+                echo "Upload HTTP status: $UPLOAD_CODE"
+
+                if [ "$UPLOAD_CODE" -ge 200 ] && [ "$UPLOAD_CODE" -lt 300 ]; then
+                  echo "  ✅ Uploaded $filename"
+                  UPLOAD_COUNT=$((UPLOAD_COUNT + 1))
+                  SUCCESS=1
+                  break
+                fi
+
+                echo "  ⚠️ Upload attempt $RETRY_COUNT failed. Response: $UPLOAD_BODY"
+                sleep 5
+              done
+
+              if [ $SUCCESS -ne 1 ]; then
+                echo "❌ Upload failed for $filename after $MAX_RETRIES attempts."
+                exit 1
               fi
-
-              echo "  ⚠️ Primary upload URL failed."
-              echo "  Response: $UPLOAD_BODY"
-
-              echo "❌ Upload failed for $filename."
-              exit 1
             done
           fi
 
