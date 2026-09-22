@@ -202,6 +202,10 @@ jobs:
             fi
           }
 
+          # Gitee Release attachments use the /attach_files API.
+          # Gitee does NOT use GitHub's /assets endpoint here.
+          # See Gitee SDK API definitions for GET/POST/DELETE attach_files.
+
           # ------------------------------------------------------------
           # Build release JSON.
           # ------------------------------------------------------------
@@ -368,7 +372,6 @@ jobs:
           fi
 
           VERIFY_ID=$(echo "$VERIFY" | jq -r '.id // empty')
-          ASSETS_URL=$(echo "$VERIFY" | jq -r '.assets_url // empty')
           HTML_URL=$(echo "$VERIFY" | jq -r '.html_url // empty')
 
           if [ "$VERIFY_ID" != "$RELEASE_ID" ]; then
@@ -379,20 +382,19 @@ jobs:
           fi
 
           echo "Release verified: id=$VERIFY_ID"
-          echo "Assets URL: ${ASSETS_URL:-<none>}"
-          echo "HTML URL: ${HTML_URL:-<none>}"
+                    echo "HTML URL: ${HTML_URL:-<none>}"
 
           # ------------------------------------------------------------
-          # Get existing assets and delete them.
+          # Get existing Release attachments and delete them.
           #
           # This makes manual re-sync idempotent:
           # old assets -> delete -> upload current GitHub assets.
           # ------------------------------------------------------------
           echo
-          echo "=== Checking existing Gitee assets ==="
+          echo "=== Checking existing Gitee Release attachments ==="
 
           gitee_api GET \
-            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets"
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files"
 
           ASSETS_RESPONSE="$GITEE_RESPONSE"
           ASSETS_CODE="$GITEE_HTTP_CODE"
@@ -415,7 +417,7 @@ jobs:
               echo "Deleting existing asset: $asset_id"
 
               gitee_api DELETE \
-                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets/$asset_id"
+                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files/$asset_id"
 
               DELETE_RESPONSE="$GITEE_RESPONSE"
               DELETE_CODE="$GITEE_HTTP_CODE"
@@ -431,10 +433,10 @@ jobs:
           fi
 
           # ------------------------------------------------------------
-          # Upload GitHub Release assets.
+          # Upload GitHub Release attachments.
           # ------------------------------------------------------------
           echo
-          echo "=== Uploading assets to Gitee ==="
+          echo "=== Uploading Release attachments to Gitee ==="
 
           shopt -s nullglob
           ASSETS=(./release_assets/*)
@@ -457,7 +459,7 @@ jobs:
                 --connect-timeout 15 \
                 --max-time 900 \
                 -X POST \
-                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets" \
+                "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files" \
                 -H "Authorization: token $GITEE_TOKEN" \
                 -F "file=@$asset" \
                 -F "name=$filename" \
@@ -477,36 +479,6 @@ jobs:
               echo "  ⚠️ Primary upload URL failed."
               echo "  Response: $UPLOAD_BODY"
 
-              # Try the release's assets_url as a fallback if Gitee
-              # provides one.
-              if [ -n "$ASSETS_URL" ] && [ "$ASSETS_URL" != "null" ]; then
-                echo "  Trying alternative assets URL: $ASSETS_URL"
-
-                ALT_RESPONSE=$(curl -sS \
-                  --connect-timeout 15 \
-                  --max-time 900 \
-                  -X POST \
-                  "$ASSETS_URL" \
-                  -H "Authorization: token $GITEE_TOKEN" \
-                  -F "file=@$asset" \
-                  -F "name=$filename" \
-                  -w $'\n%{http_code}')
-
-                ALT_CODE=$(printf '%s\n' "$ALT_RESPONSE" | tail -n 1)
-                ALT_BODY=$(printf '%s\n' "$ALT_RESPONSE" | sed '$d')
-
-                echo "Alternative upload HTTP status: $ALT_CODE"
-
-                if [ "$ALT_CODE" -ge 200 ] && [ "$ALT_CODE" -lt 300 ]; then
-                  echo "  ✅ Uploaded $filename via alternative URL"
-                  UPLOAD_COUNT=$((UPLOAD_COUNT + 1))
-                  continue
-                fi
-
-                echo "  ❌ Alternative upload also failed."
-                echo "  Response: $ALT_BODY"
-              fi
-
               echo "❌ Upload failed for $filename."
               exit 1
             done
@@ -519,13 +491,13 @@ jobs:
           echo "=== Final verification ==="
 
           gitee_api GET \
-            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/assets"
+            "https://gitee.com/api/v5/repos/$REPO/releases/$RELEASE_ID/attach_files"
 
           FINAL_RESPONSE="$GITEE_RESPONSE"
           FINAL_CODE="$GITEE_HTTP_CODE"
 
           if [ "$FINAL_CODE" -ne 200 ]; then
-            echo "❌ Final asset verification failed (HTTP $FINAL_CODE)."
+            echo "❌ Final attachment verification failed (HTTP $FINAL_CODE)."
             echo "$FINAL_RESPONSE"
             exit 1
           fi
@@ -533,11 +505,11 @@ jobs:
           FINAL_COUNT=$(echo "$FINAL_RESPONSE" |
             jq 'if type == "array" then length else 0 end')
 
-          echo "Gitee asset count: $FINAL_COUNT"
-          echo "Assets uploaded in this run: $UPLOAD_COUNT"
+          echo "Gitee attachment count: $FINAL_COUNT"
+          echo "Attachments uploaded in this run: $UPLOAD_COUNT"
 
           if [ "$FINAL_COUNT" -ne "$UPLOAD_COUNT" ]; then
-            echo "❌ Final asset count does not match upload count."
+            echo "❌ Final attachment count does not match upload count."
             echo "Expected: $UPLOAD_COUNT"
             echo "Actual:   $FINAL_COUNT"
             exit 1
