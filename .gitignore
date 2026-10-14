@@ -30,6 +30,7 @@ DwgTextReplacer/obj/
 DwgTextExtractor/
 DwgTextReplacer/
 DwgComReplacer/
+native/
 *.py
 *.cs
 *.csproj
