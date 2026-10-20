@@ -31,6 +31,8 @@ DwgTextExtractor/
 DwgTextReplacer/
 DwgComReplacer/
 native/
+lang/
+translations/
 *.py
 *.cs
 *.csproj
