@@ -1,7 +1,9 @@
 # DwgSearch
 
-> **批量搜索 / 替换 DWG 图纸文件名与文字内容的桌面工具**
+> **批量搜索 / 替换 DWG 图纸文件名与文字内容的桌面工具**  
 > 本地建立索引，支持按文件名、正文内容关键词（含正则表达式）快速检索。
+
+[English Documentation](README_en.md) | 中文文档
 
 ![Windows](https://img.shields.io/badge/Platform-Windows%207%2F10%2F11-blue)
 ![Version](https://img.shields.io/github/v/release/DwgSearch/DwgSearch?label=Version)
