@@ -52,6 +52,7 @@ requirements.txt
 
 # 配置文件（可能包含本地路径/密钥）
 config.json
+bookmarks.json
 *.user
 *.userprefs
 
